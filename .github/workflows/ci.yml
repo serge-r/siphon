@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# Single source of truth for the Go version used by every job.
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  collector:
+    name: collector (build, vet, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: collector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: collector/go.sum
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./... -race
+
+  probe:
+    name: probe (generate, vet, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: probe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: probe/go.sum
+      - name: Install clang and llvm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm
+      - name: Generate embedded eBPF object
+        run: make generate
+      - run: go vet ./...
+      - run: go build ./...
+
+  images:
+    name: ${{ matrix.component }} image (build only)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [collector, probe]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.component }} image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.component }}
+          file: ${{ matrix.component }}/Dockerfile
+          push: false
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+            VERSION=ci

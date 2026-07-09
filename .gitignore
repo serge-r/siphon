@@ -1,0 +1,40 @@
+# Compiled binaries
+/collector/siphon-collector
+/collector/collector
+/probe/probe
+/probe/siphon-probe
+/probe/siphon-probe-linux-amd64
+/probe/siphon-probe-linux-arm64
+
+# Generic Go build output (module-local binaries)
+/collector/tools/tools
+
+# eBPF compiled objects
+*.o
+
+# bpf2go-generated bindings (produced by `make generate`)
+/probe/probe_bpfel.go
+/probe/probe_bpfeb.go
+
+# Go
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Release build artifacts (binaries, packages)
+/dist/
+/probe/dist/
+/probe/out/
+*.deb
+*.rpm
+
+# Local enrichment caches / databases (see config.example.yaml paths)
+/var/lib/
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

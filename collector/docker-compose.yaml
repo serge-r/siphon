@@ -1,0 +1,56 @@
+services:
+  kafka-1:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://kafka-1:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    depends_on:
+      - kafka-1
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092
+
+  kafka-init:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    depends_on:
+      - kafka-1
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - >
+        for i in $$(seq 1 30); do
+          rpk topic create siphon-flows --brokers kafka-1:9092 && exit 0;
+          sleep 1;
+        done;
+        exit 1
+
+  siphon-collector:
+    build:
+      context: .
+    command:
+      - -config
+      - /etc/siphon-collector/config.yaml
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "4739:4739/udp"
+      - "9090:9090"
+    volumes:
+      - ./config.example.yaml:/etc/siphon-collector/config.yaml:ro

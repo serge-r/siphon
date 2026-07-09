@@ -1,0 +1,83 @@
+---
+global:
+  listener:
+    protocol: udp
+    address: ":4739"
+    read_buffer_bytes: 4194304
+    metrics: ":9090"
+  logging:
+    level: debug
+    format: json
+  pipeline:
+    packet_queue_size: 10000
+    flow_queue_size: 50000
+    workers: 2
+    batch:
+      max_records: 1000
+      flush_interval: 5s
+
+enrichment:
+  static:
+    "10.0.0.0/8": "internal"
+    "8.8.8.8": "google-dns"
+
+  inventory:
+    enabled: false
+    endpoint_url: "https://inventory.example.com/servers.json"
+    cache_ttl: 1h
+    timeout: 30s
+
+  kubernetes:
+    enabled: true
+    kubeconfig: "" # if empty, uses in-cluster config
+    internal_networks:
+      - 10.0.0.0/8
+
+  aws_ip_ranges:
+    enabled: false
+    endpoint_url: "https://ip-ranges.amazonaws.com/ip-ranges.json"
+    cache_ttl: 1h
+    cache_file: "/var/lib/aws-ip-ranges/ip-ranges.json"
+    timeout: 30s
+
+  dns:
+    enabled: false
+    timeout: 500ms
+    cache_ttl: 1h
+    max_cache_entries: 100000 # cap on cached IPs to bound memory
+
+  geoip:
+    enabled: false
+    cache_ttl: 1h
+    timeout: 5m # HTTP timeout for downloading the MMDB databases
+    database_url: "https://geoip.download.com/"
+    database_save_path: "/var/lib/geoip/"
+
+outputs:
+  - type: stdout
+    enabled: true
+    config:
+
+  - type: kafka
+    enabled: false
+    config:
+      brokers:
+        - kafka-1:9092
+      topic: siphon-flows
+      linger: 10ms
+      batch_max_bytes: 16384
+      max_buffered_records: 1000
+      max_buffered_bytes: 1048576
+      produce_request_timeout: 5s
+      ping_timeout: 5s
+      # SASL/PLAIN sends credentials in cleartext unless ssl.enabled is true.
+      # Keep ssl.enabled: true whenever sasl.enabled: true in production.
+      sasl:
+        enabled: false
+        username: user
+        password: pass
+      ssl:
+        enabled: false
+        ca_file: ""
+        ca_pem: ""
+      compression: snappy

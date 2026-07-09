@@ -1,0 +1,38 @@
+[Unit]
+Description=siphon-probe IPFIX exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/siphon-probe
+WorkingDirectory=/opt/siphon-probe
+ExecStart=/opt/siphon-probe/siphon-probe \
+  -iface ${SIPHON_PROBE_IFACE} \
+  -direction ${SIPHON_PROBE_DIRECTION} \
+  -interval ${SIPHON_PROBE_INTERVAL} \
+  -max-flows ${SIPHON_PROBE_MAX_FLOWS} \
+  -collector ${SIPHON_PROBE_COLLECTOR}
+Restart=on-failure
+RestartSec=5s
+LimitMEMLOCK=infinity
+
+# Hardening. The probe attaches an eBPF TC classifier and sends IPFIX over UDP,
+# so it needs network-admin and BPF capabilities but nothing else. CAP_SYS_ADMIN
+# is included as a fallback for kernels older than 5.8 that lack CAP_BPF/CAP_PERFMON.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_PERFMON CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_BPF CAP_PERFMON
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
