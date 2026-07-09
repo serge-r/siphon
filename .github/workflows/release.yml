@@ -112,14 +112,17 @@ jobs:
       - name: Build packages
         run: |
           # deb/rpm versions are numeric by convention: strip the leading "v".
-          VERSION="${GITHUB_REF_NAME#v}"
+          export VERSION="${GITHUB_REF_NAME#v}"
           cd probe
           mkdir -p dist out
           cp "${GITHUB_WORKSPACE}/artifacts/siphon-probe-linux-amd64" dist/
           cp "${GITHUB_WORKSPACE}/artifacts/siphon-probe-linux-arm64" dist/
           for arch in amd64 arm64; do
+            # nfpm does not expand env vars inside contents[].src, so render the
+            # config ourselves and feed nfpm a fully-resolved file.
+            ARCH="$arch" envsubst '${ARCH} ${VERSION}' < nfpm.yaml > nfpm.rendered.yaml
             for pkg in deb rpm; do
-              ARCH="$arch" VERSION="$VERSION" nfpm package -f nfpm.yaml -p "$pkg" -t out/
+              nfpm package -f nfpm.rendered.yaml -p "$pkg" -t out/
             done
           done
       - uses: actions/upload-artifact@v4

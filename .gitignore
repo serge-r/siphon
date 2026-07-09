@@ -26,6 +26,7 @@ coverage.html
 /dist/
 /probe/dist/
 /probe/out/
+/probe/nfpm.rendered.yaml
 *.deb
 *.rpm
 
