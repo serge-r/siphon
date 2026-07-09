@@ -132,4 +132,7 @@ int tc_monitor(struct __sk_buff *skb) {
     return TC_ACT_OK; // Continue packet processing
 }
 
-char _license[] SEC("license") = "GPL";
+// BPF "license" gates access to GPL-only kernel helpers; it is not the source
+// copyright license (the project is MIT). "Dual MIT/GPL" is GPL-compatible, so
+// all helpers stay available while matching the project's MIT licensing.
+char _license[] SEC("license") = "Dual MIT/GPL";
