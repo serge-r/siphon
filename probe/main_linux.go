@@ -70,6 +70,25 @@ type config struct {
 	direction string
 	interval  time.Duration
 	maxFlows  uint
+	debug     bool
+}
+
+// debugEnabled gates verbose logging; set once from the -debug flag in run().
+var debugEnabled bool
+
+func debugf(format string, args ...any) {
+	if debugEnabled {
+		log.Printf("[debug] "+format, args...)
+	}
+}
+
+// formatFlowKey renders a flow key as "src_ip:port -> dst_ip:port proto=N".
+// IPs are stored host-order (the BPF program applies ntohl), so the high byte
+// is the first octet.
+func formatFlowKey(k flowKey) string {
+	src := net.IPv4(byte(k.SrcIP>>24), byte(k.SrcIP>>16), byte(k.SrcIP>>8), byte(k.SrcIP))
+	dst := net.IPv4(byte(k.DstIP>>24), byte(k.DstIP>>16), byte(k.DstIP>>8), byte(k.DstIP))
+	return fmt.Sprintf("%s:%d -> %s:%d proto=%d", src, k.SrcPort, dst, k.DstPort, k.Proto)
 }
 
 func main() {
@@ -90,6 +109,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.direction, "direction", "ingress", "TC hook direction: ingress or egress")
 	flag.DurationVar(&cfg.interval, "interval", 10*time.Second, "flow map polling interval")
 	flag.UintVar(&cfg.maxFlows, "max-flows", 10000, "maximum number of flow entries kept in the eBPF LRU map")
+	flag.BoolVar(&cfg.debug, "debug", false, "enable verbose debug logging")
 	flag.Parse()
 	return cfg
 }
@@ -105,6 +125,7 @@ func run(ctx context.Context, cfg config) error {
 		return fmt.Errorf("max-flows must be <= %d", maxMapEntries)
 	}
 
+	debugEnabled = cfg.debug
 	log.Printf("siphon-probe %s starting", version)
 
 	spec, err := loadProbe()
@@ -136,6 +157,15 @@ func run(ctx context.Context, cfg config) error {
 	statsMap := coll.Maps["stats_map"]
 	if statsMap == nil {
 		return fmt.Errorf("eBPF object does not contain map stats_map")
+	}
+
+	if debugEnabled {
+		numCPU, _ := ebpf.PossibleCPU()
+		debugf("flow_map: type=%s keySize=%d valueSize=%d maxEntries=%d flags=%d",
+			flowMap.Type(), flowMap.KeySize(), flowMap.ValueSize(), flowMap.MaxEntries(), flowMap.Flags())
+		debugf("stats_map: type=%s valueSize=%d maxEntries=%d",
+			statsMap.Type(), statsMap.ValueSize(), statsMap.MaxEntries())
+		debugf("possibleCPU=%d", numCPU)
 	}
 
 	link, err := netlink.LinkByName(cfg.iface)
@@ -182,6 +212,13 @@ func run(ctx context.Context, cfg config) error {
 				continue
 			}
 
+			if debugEnabled {
+				debugf("poll: drained %d flow records", len(records))
+				for _, r := range records {
+					debugf("  flow %s packets=%d bytes=%d", formatFlowKey(r.Key), r.Packets, r.Bytes)
+				}
+			}
+
 			currentStats, err := readBPFStats(statsMap)
 			if err != nil {
 				log.Printf("read stats_map: %v", err)
@@ -189,6 +226,8 @@ func run(ctx context.Context, cfg config) error {
 				deltaStats := currentStats.Sub(previousStats)
 				previousStats = currentStats
 				logMapPressure(len(records), cfg.maxFlows, deltaStats)
+				debugf("stats: new_flow_insert_attempts_delta=%d flow_insert_failures_delta=%d",
+					deltaStats.NewFlowInsertAttempts, deltaStats.FlowInsertFailures)
 			}
 
 			if len(records) > 0 {
@@ -200,6 +239,8 @@ func run(ctx context.Context, cfg config) error {
 						break
 					}
 				}
+				debugf("exported %d flow records as IPFIX to %s, next sequence=%d",
+					len(records), cfg.collector, sequence)
 			}
 		}
 	}

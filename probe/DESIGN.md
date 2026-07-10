@@ -70,6 +70,38 @@ Flags:
 - `-interval`: eBPF map polling interval.
 - `-max-flows`: maximum number of flow entries in the LRU eBPF map.
 - `-collector`: UDP address of the IPFIX collector.
+- `-debug`: enable verbose debug logging (map metadata at startup, plus
+  per-interval drained/exported flow counts and each flow's 5-tuple).
+
+## systemd service
+
+The `deb`/`rpm` packages install a `siphon-probe.service` unit and a
+`/etc/default/siphon-probe` environment file. The unit reads its flags from
+`SIPHON_PROBE_*` variables in that file:
+
+```sh
+SIPHON_PROBE_IFACE=eth0
+SIPHON_PROBE_DIRECTION=ingress
+SIPHON_PROBE_INTERVAL=10s
+SIPHON_PROBE_MAX_FLOWS=10000
+SIPHON_PROBE_COLLECTOR=127.0.0.1:4739
+# Extra flags passed verbatim; space-separated. Set to "-debug" for verbose logs.
+SIPHON_PROBE_EXTRA_ARGS=
+```
+
+`SIPHON_PROBE_EXTRA_ARGS` is appended to `ExecStart` unquoted (as `$VAR`, not
+`${VAR}`), so an empty value adds no argument. Use it to toggle optional flags
+without editing the unit, for example enable debug logging:
+
+```sh
+sudo sed -i 's/^SIPHON_PROBE_EXTRA_ARGS=.*/SIPHON_PROBE_EXTRA_ARGS=-debug/' /etc/default/siphon-probe
+sudo systemctl restart siphon-probe
+journalctl -u siphon-probe -f
+```
+
+The unit runs with a restricted capability set (`CAP_NET_ADMIN`, `CAP_BPF`,
+`CAP_PERFMON`, and `CAP_SYS_ADMIN` as a fallback for kernels older than 5.8)
+plus the usual systemd sandboxing directives.
 
 ## Exported IPFIX Template
 

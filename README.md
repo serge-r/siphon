@@ -79,8 +79,9 @@ docker run --network host --cap-add NET_ADMIN --cap-add BPF \
   serger89/siphon-probe -iface eth0 -collector 10.0.0.1:4739
 ```
 
-See [`probe/DESIGN.md`](probe/DESIGN.md) for build-from-source details and the
-exported IPFIX template.
+See [`probe/DESIGN.md`](probe/DESIGN.md) for build-from-source details, the
+systemd unit / `SIPHON_PROBE_*` configuration (including `-debug` via
+`SIPHON_PROBE_EXTRA_ARGS`), and the exported IPFIX template.
 
 ## collector
 

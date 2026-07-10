@@ -26,9 +26,10 @@ typedef unsigned long long __u64;
 #define __uint(name, val) int(*name)[val]
 #define __type(name, val) typeof(val) *name
 
-/* Stable UAPI numeric constants. */
+/* Stable UAPI numeric constants. Map-type values are from enum bpf_map_type:
+ *   PERCPU_HASH=5, PERCPU_ARRAY=6, LRU_HASH=9, LRU_PERCPU_HASH=10. */
 #define BPF_MAP_TYPE_PERCPU_ARRAY 6
-#define BPF_MAP_TYPE_LRU_PERCPU_HASH 9
+#define BPF_MAP_TYPE_LRU_PERCPU_HASH 10
 #define BPF_ANY 0
 #define TC_ACT_OK 0
 #define ETH_P_IP 0x0800

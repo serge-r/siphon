@@ -12,7 +12,8 @@ ExecStart=/opt/siphon-probe/siphon-probe \
   -direction ${SIPHON_PROBE_DIRECTION} \
   -interval ${SIPHON_PROBE_INTERVAL} \
   -max-flows ${SIPHON_PROBE_MAX_FLOWS} \
-  -collector ${SIPHON_PROBE_COLLECTOR}
+  -collector ${SIPHON_PROBE_COLLECTOR} \
+  $SIPHON_PROBE_EXTRA_ARGS
 Restart=on-failure
 RestartSec=5s
 LimitMEMLOCK=infinity

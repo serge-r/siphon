@@ -3,3 +3,7 @@ SIPHON_PROBE_DIRECTION=ingress
 SIPHON_PROBE_INTERVAL=10s
 SIPHON_PROBE_MAX_FLOWS=10000
 SIPHON_PROBE_COLLECTOR=127.0.0.1:4739
+
+# Extra command-line flags passed verbatim. Set to "-debug" for verbose logging.
+# Left empty by default (no extra flags). Multiple flags are space-separated.
+SIPHON_PROBE_EXTRA_ARGS=
