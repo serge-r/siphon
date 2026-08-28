@@ -77,7 +77,14 @@ func (e *AWSIPRangesEnricher) Ready() error {
 	if e.ready.Load() {
 		return nil
 	}
-	if err, ok := e.lastErr.Load().(error); ok && err != nil {
+
+	// A failed refresh leaves the ranges from the last successful one in place,
+	// so lookups keep working on staler data. See InventoryEnricher.Ready for
+	// why that must not fail the readiness probe.
+	if e.cached() > 0 {
+		return nil
+	}
+	if err := loadErr(&e.lastErr); err != nil {
 		return err
 	}
 	return fmt.Errorf("aws ip ranges data is not loaded")
@@ -106,28 +113,19 @@ func (e *AWSIPRangesEnricher) Close() {
 }
 
 func (e *AWSIPRangesEnricher) refreshLoop() {
-	e.refresh()
-
-	ticker := time.NewTicker(e.cfg.CacheTTL)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-e.stopCh:
-			return
-		case <-ticker.C:
-			e.refresh()
-		}
-	}
+	runRefreshLoop(e.stopCh, e.cfg.CacheTTL, e.logger, e.Name(), e.refresh)
 }
 
-func (e *AWSIPRangesEnricher) refresh() {
+func (e *AWSIPRangesEnricher) refresh() error {
 	if err := e.loadFreshOrDownload(); err != nil {
 		e.ready.Store(false)
-		e.lastErr.Store(err)
+		e.lastErr.Store(errHolder{err: err})
 		e.logger.Error("refresh aws ip ranges", "error", err)
-		return
+		return err
 	}
 	e.ready.Store(true)
+	e.lastErr.Store(errHolder{})
+	return nil
 }
 
 func (e *AWSIPRangesEnricher) loadFreshOrDownload() error {
@@ -234,6 +232,13 @@ func (e *AWSIPRangesEnricher) lookup(rawIP string) (awsIPRangeResult, bool) {
 		}
 	}
 	return awsIPRangeResult{}, false
+}
+
+// cached is the number of prefixes the enricher can currently match against.
+func (e *AWSIPRangesEnricher) cached() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.ranges)
 }
 
 func buildAWSIPRanges(prefixes []awsIPRangePrefix) ([]awsIPRange, error) {

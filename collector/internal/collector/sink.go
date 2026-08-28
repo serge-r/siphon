@@ -112,12 +112,22 @@ func (s *StdoutSink) WriteBatch(_ context.Context, batch []EnrichedFlow) error {
 
 func (s *StdoutSink) Close() error { return nil }
 
+// kafkaPingInterval is how often the background connectivity check runs. The
+// readiness probe reads the cached verdict instead of pinging inline: kubelet
+// closes the probe connection after readinessProbe.timeoutSeconds (commonly 1s),
+// which cancelled the request context the ping derived its own timeout from, and
+// a healthy-but-slow broker failed /readyz with "context canceled".
+const kafkaPingInterval = 10 * time.Second
+
 type KafkaSink struct {
 	client      *kgo.Client
 	topic       string
 	pingTimeout time.Duration
 	logger      *slog.Logger
 	ready       atomic.Bool
+	lastErr     atomic.Value // errHolder
+	stopOnce    sync.Once
+	stopCh      chan struct{}
 }
 
 func NewKafkaSink(cfg OutputConfig, logger *slog.Logger) (*KafkaSink, error) {
@@ -200,22 +210,45 @@ func NewKafkaSink(cfg OutputConfig, logger *slog.Logger) (*KafkaSink, error) {
 		topic:       kafkaConfig.Topic,
 		pingTimeout: kafkaConfig.PingTimeout,
 		logger:      logger,
+		stopCh:      make(chan struct{}),
 	}
 	if err := sink.ping(context.Background()); err != nil {
 		logger.Error("kafka initial connectivity check failed", "topic", kafkaConfig.Topic, "error", err)
 	} else {
 		logger.Info("kafka producer initialized and connected", "topic", kafkaConfig.Topic)
 	}
+	go sink.pingLoop()
 	return sink, nil
 }
 
 func (s *KafkaSink) Name() string { return "kafka" }
 
-func (s *KafkaSink) Ready(ctx context.Context) []SinkReadiness {
-	if err := s.ping(ctx); err != nil {
-		return []SinkReadiness{{Name: s.Name(), Ready: false, Error: err.Error()}}
+// Ready reports the verdict of the last background ping. It performs no I/O, so
+// it is independent of the caller's deadline and costs the brokers one ping per
+// kafkaPingInterval rather than one per readiness probe.
+func (s *KafkaSink) Ready(context.Context) []SinkReadiness {
+	if s.ready.Load() {
+		return []SinkReadiness{{Name: s.Name(), Ready: true}}
 	}
-	return []SinkReadiness{{Name: s.Name(), Ready: true}}
+
+	readiness := SinkReadiness{Name: s.Name(), Error: "kafka connectivity has not been checked yet"}
+	if err := loadErr(&s.lastErr); err != nil {
+		readiness.Error = err.Error()
+	}
+	return []SinkReadiness{readiness}
+}
+
+func (s *KafkaSink) pingLoop() {
+	ticker := time.NewTicker(kafkaPingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			_ = s.ping(context.Background())
+		}
+	}
 }
 
 func (s *KafkaSink) ping(ctx context.Context) error {
@@ -225,10 +258,12 @@ func (s *KafkaSink) ping(ctx context.Context) error {
 	s.logger.Debug("checking kafka connectivity", "topic", s.topic, "timeout", s.pingTimeout)
 	if err := s.client.Ping(pingCtx); err != nil {
 		s.ready.Store(false)
+		s.lastErr.Store(errHolder{err: err})
 		s.logger.Debug("kafka connectivity check failed", "topic", s.topic, "error", err)
 		return err
 	}
 	s.ready.Store(true)
+	s.lastErr.Store(errHolder{})
 	s.logger.Debug("kafka connectivity check succeeded", "topic", s.topic)
 	return nil
 }
@@ -255,6 +290,9 @@ func (s *KafkaSink) WriteBatch(ctx context.Context, batch []EnrichedFlow) error 
 }
 
 func (s *KafkaSink) Close() error {
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
 	s.client.Close()
 	return nil
 }

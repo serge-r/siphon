@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // InventoryEnricher maps flow endpoint IPs to human-readable server names by
@@ -123,7 +122,17 @@ func (e *InventoryEnricher) Ready() error {
 	if e.ready.Load() {
 		return nil
 	}
-	if err, ok := e.lastErr.Load().(error); ok && err != nil {
+
+	// A failed refresh leaves the map built by the last successful one in place,
+	// so Enrich keeps resolving IPs — the data only gets staler, which with an
+	// hour-long cache TTL is a normal operating condition anyway. Reporting that
+	// as not-ready drops the pod from its Service EndpointSlice, and behind a UDP
+	// load balancer that turns degraded enrichment into a total loss of
+	// ingestion. Only an enricher that never loaded anything is unready.
+	if e.cached() > 0 {
+		return nil
+	}
+	if err := loadErr(&e.lastErr); err != nil {
 		return err
 	}
 	return fmt.Errorf("inventory data is not loaded")
@@ -155,34 +164,25 @@ func (e *InventoryEnricher) Close() {
 }
 
 func (e *InventoryEnricher) refreshLoop() {
-	e.refresh()
-
-	ticker := time.NewTicker(e.cfg.CacheTTL)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-e.stopCh:
-			return
-		case <-ticker.C:
-			e.refresh()
-		}
-	}
+	runRefreshLoop(e.stopCh, e.cfg.CacheTTL, e.logger, e.Name(), e.refresh)
 }
 
-func (e *InventoryEnricher) refresh() {
+func (e *InventoryEnricher) refresh() error {
 	namesByIP, err := e.fetch()
 	if err != nil {
 		e.ready.Store(false)
-		e.lastErr.Store(err)
+		e.lastErr.Store(errHolder{err: err})
 		e.logger.Error("refresh inventory data", "error", err)
-		return
+		return err
 	}
 
 	e.mu.Lock()
 	e.namesByIP = namesByIP
 	e.mu.Unlock()
 	e.ready.Store(true)
+	e.lastErr.Store(errHolder{})
 	e.logger.Info("inventory data loaded", "ips", len(namesByIP))
+	return nil
 }
 
 func (e *InventoryEnricher) fetch() (map[string]string, error) {
@@ -212,6 +212,13 @@ func (e *InventoryEnricher) lookup(ip string) string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.namesByIP[ip]
+}
+
+// cached is the number of IPs the enricher can currently resolve.
+func (e *InventoryEnricher) cached() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.namesByIP)
 }
 
 func buildInventoryIPNameMap(servers []inventoryServer) map[string]string {

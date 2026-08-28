@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -46,6 +47,27 @@ func TestKafkaCompressionCodecAcceptsSupportedValues(t *testing.T) {
 		if _, err := kafkaCompressionCodec(name); err != nil {
 			t.Fatalf("kafkaCompressionCodec(%q) error = %v", name, err)
 		}
+	}
+}
+
+// A nil client is enough to prove Ready does no I/O: it would panic if it still
+// pinged the brokers inline.
+func TestKafkaSinkReadyReadsTheCachedPingVerdict(t *testing.T) {
+	sink := &KafkaSink{logger: discardLogger()}
+
+	readiness := sink.Ready(t.Context())
+	if len(readiness) != 1 || readiness[0].Ready {
+		t.Fatalf("Ready() = %+v, want a single not-ready entry before the first ping", readiness)
+	}
+
+	sink.lastErr.Store(errHolder{err: errors.New("dial tcp: connection refused")})
+	if got := sink.Ready(t.Context())[0].Error; got != "dial tcp: connection refused" {
+		t.Fatalf("Ready() error = %q, want the last ping error", got)
+	}
+
+	sink.ready.Store(true)
+	if !sink.Ready(t.Context())[0].Ready {
+		t.Fatal("Ready() is not ready, want ready after a successful ping")
 	}
 }
 

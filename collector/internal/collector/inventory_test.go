@@ -2,7 +2,12 @@ package collector
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -60,6 +65,56 @@ func TestInventoryEnricherEnrichesDestinationIP(t *testing.T) {
 	}
 	if flow.DestinationName != "web-59.example.com" {
 		t.Fatalf("DestinationName = %q, want web-59.example.com", flow.DestinationName)
+	}
+}
+
+func TestInventoryEnricherStaysReadyOnFailedRefresh(t *testing.T) {
+	var failing atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if failing.Load() {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, testInventoryJSON)
+	}))
+	defer server.Close()
+
+	enricher := &InventoryEnricher{
+		cfg: InventoryEnrichmentConfig{
+			EndpointURL: server.URL,
+			CacheTTL:    time.Hour,
+			Timeout:     5 * time.Second,
+		},
+		logger:    discardLogger(),
+		client:    server.Client(),
+		namesByIP: map[string]string{},
+		stopCh:    make(chan struct{}),
+	}
+
+	if err := enricher.refresh(); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+
+	failing.Store(true)
+	if err := enricher.refresh(); err == nil {
+		t.Fatal("refresh() error is nil, want the upstream 502")
+	}
+
+	if err := enricher.Ready(); err != nil {
+		t.Fatalf("Ready() = %v, want nil while the cache is still populated", err)
+	}
+	if got := enricher.lookup("203.0.113.108"); got != "web-59.example.com" {
+		t.Fatalf("lookup() = %q, want web-59.example.com", got)
+	}
+}
+
+func TestInventoryEnricherNotReadyWithoutData(t *testing.T) {
+	enricher := &InventoryEnricher{namesByIP: map[string]string{}}
+	enricher.lastErr.Store(errHolder{err: errors.New("fetch inventory data: unexpected status 502 Bad Gateway")})
+
+	if err := enricher.Ready(); err == nil {
+		t.Fatal("Ready() is nil, want an error when no data was ever loaded")
 	}
 }
 

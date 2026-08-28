@@ -116,7 +116,14 @@ func (e *GeoIPEnricher) Ready() error {
 	if e.ready.Load() {
 		return nil
 	}
-	if err, ok := e.lastErr.Load().(error); ok && err != nil {
+
+	// A failed refresh leaves the readers opened by the last successful one in
+	// place, so lookups keep working on staler databases. See
+	// InventoryEnricher.Ready for why that must not fail the readiness probe.
+	if e.databasesOpen() {
+		return nil
+	}
+	if err := loadErr(&e.lastErr); err != nil {
 		return err
 	}
 	return fmt.Errorf("geoip databases are not loaded")
@@ -154,28 +161,19 @@ func (e *GeoIPEnricher) Close() {
 }
 
 func (e *GeoIPEnricher) refreshLoop() {
-	e.refresh()
-
-	ticker := time.NewTicker(e.cfg.CacheTTL)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-e.stopCh:
-			return
-		case <-ticker.C:
-			e.refresh()
-		}
-	}
+	runRefreshLoop(e.stopCh, e.cfg.CacheTTL, e.logger, e.Name(), e.refresh)
 }
 
-func (e *GeoIPEnricher) refresh() {
+func (e *GeoIPEnricher) refresh() error {
 	if err := e.loadFreshOrDownload(); err != nil {
 		e.ready.Store(false)
-		e.lastErr.Store(err)
+		e.lastErr.Store(errHolder{err: err})
 		e.logger.Error("refresh geoip databases", "error", err)
-		return
+		return err
 	}
 	e.ready.Store(true)
+	e.lastErr.Store(errHolder{})
+	return nil
 }
 
 func (e *GeoIPEnricher) loadFreshOrDownload() error {
@@ -281,6 +279,13 @@ func (e *GeoIPEnricher) lookup(rawIP string) (geoIPResult, bool) {
 	result.City = localizedName(cityRecord.City.Names, "")
 
 	return result, result.ISP != "" || result.ASN != 0 || result.Country != "" || result.City != ""
+}
+
+// databasesOpen reports whether the enricher currently has all three readers.
+func (e *GeoIPEnricher) databasesOpen() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.readers.city != nil && e.readers.country != nil && e.readers.isp != nil
 }
 
 func geoIPDatabasePaths(savePath string) map[string]string {
